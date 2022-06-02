@@ -17,6 +17,10 @@ class IngressService(CephService):
     TYPE = 'ingress'
 
     def primary_daemon_type(self) -> str:
+        mode = f'ingress.nfs.cephfs/direct'
+        direct = self.mgr.get_store(mode)
+        if direct:
+            return 'keepalived'
         return 'haproxy'
 
     def per_host_daemon_type(self) -> Optional[str]:
@@ -26,8 +30,18 @@ class IngressService(CephService):
             self,
             daemon_spec: CephadmDaemonDeploySpec,
     ) -> CephadmDaemonDeploySpec:
-        if daemon_spec.daemon_type == 'haproxy':
-            return self.haproxy_prepare_create(daemon_spec)
+
+        # check if the new mode is required for nfs
+        mode = f'ingress.nfs.cephfs/direct'
+        direct = self.mgr.get_store(mode)
+
+        spec = cast(IngressSpec, self.mgr.spec_store[daemon_spec.service_name].spec)
+        backend_spec = self.mgr.spec_store[spec.backend_service].spec
+
+        assert spec.backend_service
+
+        if daemon_spec.daemon_type == 'haproxy' and not bool(direct) and backend_spec.service_type is not 'nfs':
+                return self.haproxy_prepare_create(daemon_spec)
         if daemon_spec.daemon_type == 'keepalived':
             return self.keepalived_prepare_create(daemon_spec)
         assert False, "unexpected daemon type"
@@ -186,7 +200,7 @@ class IngressService(CephService):
 
         daemons = self.mgr.cache.get_daemons_by_service(spec.service_name())
 
-        if not daemons:
+        if not daemons and self.primary_daemon_type() != 'keepalived':
             raise OrchestratorError(
                 f'Failed to generate keepalived.conf: No daemons deployed for {spec.service_name()}')
 
